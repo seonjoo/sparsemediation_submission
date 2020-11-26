@@ -1,0 +1,277 @@
+---
+title: "RANN"
+author: "Seonjoo Lee"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,message=FALSE, warning=FALSE)
+rm(list=ls())
+library(psych)
+library(ggplot2)
+library(reshape2)
+library(gridExtra)
+library(parallel)
+library(lavaan)
+library(smm)
+library(parallel)
+library(dplyr)
+library(knitr)
+library(ppcor)
+library(kableExtra)
+load('thick.dat')
+```
+
+# Mediation Analysis for RANN 
+
+## Model 1. Mediation: Age -> Mean thickness -> Global cognition
+```{r, message=FALSE,warning=FALSE}
+B=1000
+########################
+# 1) Mediation: Age -> Mean thickness -> Global cognition
+model <- ' # direct effect
+             Global ~ c*Age
+          # mediator
+          Mean.Thickness ~ a*Age
+          Global ~ b*Mean.Thickness
+          # indirect effect (a*b)
+          ab := a*b
+          # total effect
+          total := c + (a*b)
+'
+set.seed(20200512)
+fit <- sem(model, data = data.frame(thick), se="boot",bootstrap = B)
+
+kable(parameterEstimates(fit,standardized=TRUE), digits=3)## significant mediation)
+
+a<-ggplot(thick,aes(x=Age,y=Global))+geom_point()+stat_smooth(size=2,method="lm")
+b<-ggplot(thick,aes(x=Age,y=Mean.Thickness))+geom_point()+stat_smooth(size=2,method="lm")
+c<-ggplot(thick,aes(x=Mean.Thickness,y=Global))+geom_point()+stat_smooth(size=2,method="lm")
+```
+
+```{r, fig.width=8, fig.height=4, message=FALSE,warning=FALSE}
+grid.arrange(a,b,c, ncol=3, nrow=1)  
+png(paste('Figure4_golbal_cog.png',sep=""),width=2700,height=900,res=300)
+grid.arrange(a,b,c, ncol=3, nrow=1)  
+dev.off()
+```
+
+## Model2. p-value based screening
+
+* For the threshold, p-value of 0.2, 0.1, 0.05 and multiple compariation correction controlling for false discovery rate (B-H) will be used. 
+
+#### (a) p<0.2
+```{r, message=FALSE,warning=FALSE}
+#patha
+x = scale(thick$Age)
+m = scale(thick[,c(1,12:332)])
+y = scale(thick$Global)
+
+pthresh=0.2
+patha=which(unlist(lapply(1:ncol(m), function(j)cor.test(x,m[,j])$p.value))<pthresh)
+pathb=which(unlist(lapply(1:ncol(m), function(j)pcor.test(y,m[,j],x)$p.value))<pthresh)
+pathb[pathb %in% patha]
+
+colnames(m)[pathb[pathb %in% patha]]
+```
+
+#### (b) p<0.1 and p<0.05 (results were same)
+```{r, message=FALSE,warning=FALSE}
+pthresh=0.1
+patha=which(unlist(lapply(1:ncol(m), function(j)cor.test(x,m[,j])$p.value))<pthresh)
+pathb=which(unlist(lapply(1:ncol(m), function(j)pcor.test(y,m[,j],x)$p.value))<pthresh)
+colnames(m)[pathb[pathb %in% patha]]
+
+model.screen <- ' # direct effect
+             Global ~ c*Age
+          # mediator
+          Mean.Thickness ~ a1*Age
+          PC002 ~ a2*Age
+          PC003 ~ a3*Age
+          PC004 ~ a4*Age
+          PC012 ~ a5*Age
+          Global ~ b1*Mean.Thickness + b2*PC002+b3*PC003+b4*PC004+b5*PC012
+
+          # indirect effect (a*b)
+          ab1 := a1*b1
+          ab2 := a2*b2
+          ab3 := a3*b3
+          ab4 := a4*b4
+          ab5 := a5*b5
+          # total effect
+          total := c + ab1 + ab2 + ab3 + ab4 + ab5
+'
+set.seed(20200512)
+
+fit <- sem(model.screen, data = data.frame(Age=x, Global=y, m), se="boot",bootstrap = B)
+kable(parameterEstimates(fit,standardized=TRUE),digits=3) ## significant mediation)
+
+pthresh=0.05
+patha=which(unlist(lapply(1:ncol(m), function(j)cor.test(x,m[,j])$p.value))<pthresh)
+pathb=which(unlist(lapply(1:ncol(m), function(j)pcor.test(y,m[,j],x)$p.value))<pthresh)
+colnames(m)[pathb[pathb %in% patha]]
+```
+
+
+#### (c) Multiple comparison correction (B-H)
+
+* Nothing was selected.
+```{r, message=FALSE,warning=FALSE}
+patha=which(p.adjust(unlist(lapply(1:ncol(m), function(j)cor.test(x,m[,j])$p.value)),method='BH')<pthresh)
+pathb=which(p.adjust(unlist(lapply(1:ncol(m), function(j)pcor.test(y,m[,j],x)$p.value)),method='BH')<pthresh)
+colnames(m)[pathb[pathb %in% patha]]
+```
+
+
+## Method 3. sparse mediation 
+
+### Cross-validation
+```{r, message=FALSE,warning=FALSE}
+system.time(
+fit.cv<-cv.sparse.mediation.sgrplasso(x,m,y,tol=0.0001,K=5,max.iter=50,
+                                     lambda1 = exp(seq(-1,-5, length=10)),lambda2=exp(c(-1,1)),
+                                     alpha=seq(0.5,0.95, length=4),multicore=10,
+                                     group.penalty.factor=rep(1,ncol(m)+1),
+                                     penalty.factor=rep(1, ncol(m)*2+1),
+                                     seednum=20200615,non.zeros.stop = 200))
+
+cat(paste('lambda1=',fit.cv$cv.lambda1,
+'lambda2=',fit.cv$cv.lambda2,
+'alpha=',fit.cv$cv.alpha))
+
+fit<-sparse.mediation.grplasso(x,m,y,tol=0.0001,max.iter=50,
+                               lambda1 =fit.cv$cv.lambda1,
+                               lambda2=fit.cv$cv.lambda2,
+                               alpha=fit.cv$cv.alpha,
+                               group.penalty.factor=rep(1,ncol(m)+1),
+                               penalty.factor=rep(1, ncol(m)*2+1),verbose=FALSE)
+
+cat(paste('Number of mediators:',fit$nmed))
+colnames(m)[which(fit$medest!=0)]
+```
+
+### Examine stability of CV
+
+* evaluate whether the tuning parameters were selected stably.
+
+```{r,warning=FALSE,message=FALSE}
+z.cveval<-lapply( (1:10)*20+20200512,
+                 function(num){
+                   fit<-c()
+                   try(fit.cv<-cv.sparse.mediation.grplasso(x,m,y,tol=0.0001,K=5,max.iter=50,
+                                                        lambda1 = exp(seq(-1,-5,length=10)),
+                                                        lambda2=exp(c(-1,1)),
+                                                        group.penalty.factor=rep(1,ncol(m)+1),
+                                                        penalty.factor=rep(1, ncol(m)*2+1),
+                                                        alpha=seq(0.5,0.95,length=4),multicore=5,
+                                                        seednum=num,
+                                                        non.zeros.stop = 150))
+                   try(fit<-sparse.mediation.grplasso(x,m,y,tol=0.0001,max.iter=50,
+                                                    lambda1 =fit.cv$cv.lambda1,
+                                                    lambda2=fit.cv$cv.lambda2,
+                                                    alpha=fit.cv$cv.alpha,verbose=FALSE))
+                   return(fit)
+                   })
+
+par(mfrow=c(2,2))
+plot(unlist(lapply(z.cveval, function(zz)zz$lambda1)),main='lambda1',ylim=c(exp(-5),exp(-1)))
+plot(unlist(lapply(z.cveval, function(zz)zz$lambda2)),main='lambda2')
+plot(unlist(lapply(z.cveval, function(zz)zz$alpha)),main='alpha',ylim=c(0.5,0.95))
+plot(unlist(lapply(z.cveval, function(zz)zz$nmed)),main='Number of Mediator')
+
+
+```
+
+### To compute 95% CI of the final model
+
+```{r,warning=FALSE,message=FALSE}
+B=1000
+which(fit$medest!=0)
+
+cor.test(thick$Global, thick$Age)
+
+oneunit<-function(seednum){
+  set.seed(seednum*2 + 20200605)
+  indx=sample(length(x),length(x),replace=TRUE)
+  refit<-c()
+  try(refit<-sparse.mediation.grplasso(x[indx],as.matrix(m[indx,fit$medest!=0]),y[indx],
+                                   tol=0.0001,max.iter=50,
+                                   lambda1 =0,lambda2=0,alpha=0,verbose=TRUE))
+  returndat<-c()
+  try(returndat<-data.frame(c=refit$c, med=t(refit$medest), a=t(refit$hata), b=t(refit$hatb)))
+  return(returndat)
+}
+
+system.time(z.postinf <-data.frame(do.call(rbind,mclapply( (1:B)*2 +20200512, function(num){oneunit(seednum=num)}, mc.cores=16))) )
+z.postinf = z.postinf %>% mutate(total=c + med.1 +  med.2 +  med.3 +  med.4) 
+
+re.dat<-data.frame(t(apply(z.postinf,2, function(xx)c(mean(xx),
+                                 quantile(xx, probs=c(0.025,0.975))))))
+names(re.dat)<-c('Estimate','LCI95','UCI95')
+
+kable(round(re.dat,4)) %>%
+  kable_styling(bootstrap_options = "bordered", full_width = F)
+```
+
+### Evaluate the importance of each mediator:
+
+* Resampling and conduct 
+
+```{r bootstrap, message=FALSE,warning=FALSE}
+B=100
+run_smediation<-function(X,M,Y,K=5, 
+                         lambda1 = exp(seq(-1,-5,length=10)),
+                         lambda2=exp(c(-1,1)),
+                         alpha=seq(0.5,0.95,length=4)){
+		fit.cv=cv.sparse.mediation.sgrplasso(X,M,Y,tol=0.0001,K=5,max.iter=50,
+                                         lambda1 =lambda1,lambda2=lambda2,
+                                         alpha=alpha,multicore=1,
+		                                     group.penalty.factor=rep(1,ncol(M)+1),
+		                                     penalty.factor=rep(1, ncol(M)*2+1),
+		                                     non.zeros.stop = 200)
+		#twoway mediation
+		finalfit<-sparse.mediation.grplasso(X,M,Y,tol=0.0001,max.iter=50,
+                                                    lambda1 =fit.cv$cv.lambda1,
+                                                    lambda2=fit.cv$cv.lambda2,
+                                                    alpha=fit.cv$cv.alpha)
+		return(finalfit)
+}
+### 95% CI
+
+run_ci<-function(seed,X,M,Y){
+	set.seed(seed*2 + 20200606)
+	n = nrow(X)
+	indx1 = sample(n,n,replace=TRUE)
+#	print(indx1)
+ 	return(run_smediation(X[indx1,],M[indx1,],Y[indx1,]))
+}
+
+
+#system.time(oneinstant<-run_smediation(X=as.matrix(thick$Age),M=as.matrix(thick[,c(1,12:loc)]),Y=as.matrix(thick$Global)))
+system.time(z<-mclapply(1:B, function(seed){run_ci(seed=seed, X=as.matrix(x),M=m,Y=as.matrix(y))},mc.cores=8))
+
+#print(a)
+#save.image('rann_20200615_with_meanthickness.RData')
+```
+
+```{r,fig.width=6, fig.height=5, message=FALSE,warning=FALSE}
+
+#load('rann_20200615_with_meanthickness.RData')
+selected=(B-apply(do.call(cbind, lapply(z, function(x)x$medest)),1,function(x)sum(x==0)))/B
+
+data.frame(varname=names(thick)[c(1,12:332)], selected=selected) %>%
+  arrange(-selected) %>% filter(selected>0.5)
+
+library(ggplot2)
+library(ggthemes)
+indx=sort.int(selected,decreasing=TRUE, index.return=TRUE)$ix
+aa=ggplot(data.frame(select=selected[indx]*100, names=factor(names(thick)[c(1,12:332)][indx],levels=names(thick)[c(1,12:332)][indx]))[1:20,], aes(x=names,y=select))+geom_bar(stat='identity')+theme(axis.text.x = element_text(angle = 90, hjust = 1),plot.title = element_text(hjust = 0.5)) + ggtitle(paste('% of selection out of',B,'bootstrapping: top 20 mediators')) + ylab('% selection')+xlab('')
+aa
+
+png('Figure5_selected_20200615.png',width=2100,height=1500,res=300)
+aa
+dev.off()
+```
