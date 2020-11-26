@@ -4,7 +4,7 @@ library(MASS)
 library(corpcor)
 runsim1<-function(seednum, N=100,
                   lambda1=exp(seq(0,-6, length=15)),
-                  lambda2=exp(c(-1)),
+                  lambda2=exp(c(0)),
                   alpha=c(0.5,0.75,0.95),
                   K=5,multicore=1,
                   max.iter=50,
@@ -33,7 +33,7 @@ runsim1<-function(seednum, N=100,
   return(list(time=time1,time2=time2,cvfit=fit.cv,fit=fit))
 }
 
-inst_run<-function(N=200, V=50,nrepeat=4,K=5, n.cores=8){
+inst_run<-function(N=200, V=50,nrepeat=4,K=5, n.cores=16){
   pcmat=matrix(0,5,5)
   pcmat[1,]<-c(1,0,0.2894310,0.12851795,0.0176913)
   pcmat[2,3:5]<-c(0.5,0.4,0.3)
